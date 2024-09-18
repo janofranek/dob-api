@@ -4,7 +4,7 @@ import sys
 import fnmatch
 import json
 import base64
-import urllib.request
+import requests
 from PIL import Image, ImageDraw, ImageOps
 
 def image_to_bytes(image):
@@ -37,42 +37,59 @@ def get_template(config_data, template_name):
             return item
     return False
 
-def get_position(config_data, template_name, position_name):
-    template = get_template(config_data, template_name)
+def get_design(config_data, design_name):
+    for item in config_data["designs"]:
+        if item["designName"] == design_name:
+            return item
+    return False
+
+def get_position_def(config_data, position_name):
+    for item in config_data["positions"]:
+        if item["positionName"] == position_name:
+            return item
+    return False
+
+def fill_in_height(config_data, position_name, position):
+    position_def = get_position_def(config_data, position_name)
+    height = 0
+    if not position_def:
+        height = position["width"]
+    elif not (position_def["arWidth"] or position_def["arWidth"]==0):
+        height = position["width"]
+    else:
+        height = position["width"] / position_def["arWidth"] * position_def["arHeight"]
+    position["height"] = height
+    return position
+
+def get_position(config_data, template, position_name):
     if not template:
         return False
     for pos_item in template["positions"]:
         if pos_item["positionName"] == position_name:
-            return pos_item
+            return fill_in_height( config_data, position_name, pos_item )
     return False
 
-def put_image_on_position(template, position, image_to_paste):
+def put_image_on_position(template, position, design):
     #open template photo
-    file_name = "template_image.jpg"
-    urllib.request.urlretrieve(template["imageUrl"], file_name)
-    img_template = Image.open(file_name)
-    os.remove(file_name)
-    #open image, convert to grayscale and set size for position
-    img_obrazek = image_to_paste.convert("L").resize(get_position_size(position))
+    response = requests.get(template["imageUrl"])
+    img_template = Image.open(io.BytesIO(response.content))
+    #open design, convert to grayscale and set size for position
+    response = requests.get(design["imageUrl"])
+    img_design = Image.open(io.BytesIO(response.content)).convert("L").resize(get_position_size(position))
     #inverted image
-    img_obrazek_inverted = ImageOps.invert(img_obrazek)
+    img_design_inverted = ImageOps.invert(img_design)
     #mask with alpha
-    img_maska = img_obrazek_inverted.copy()
-    img_maska.putalpha(img_obrazek_inverted)
-    #paste template with image, applying mask
-    if (template["negative"]):
-        img_template.paste(img_obrazek_inverted, get_position_left_top(position), mask=img_maska)
-    else:
-        img_template.paste(img_obrazek, get_position_left_top(position), mask=img_maska)
+    img_mask = img_design_inverted.copy()
+    img_mask.putalpha(img_design_inverted)
+    #paste template with design, applying mask
+    img_template.paste(img_design, get_position_left_top(position), mask=img_mask)
     #return result
     return img_template
 
 def put_position_outline(template, position):
     #open template photo
-    file_name = "template_image.jpg"
-    urllib.request.urlretrieve(template["imageUrl"], file_name)
-    img_template = Image.open(file_name)
-    os.remove(file_name)
+    response = requests.get(template["imageUrl"])
+    img_template = Image.open(io.BytesIO(response.content))
     #draw position outline
     draw = ImageDraw.Draw(img_template, "RGBA")
     draw.rectangle(get_position_rectangle(position), fill=(255,164,0,127))
@@ -80,47 +97,27 @@ def put_position_outline(template, position):
     #return result
     return img_template
 
-def paste_image_on_position(config_data, template_name, position_name, image_base64):
+def paste_image_on_position(config_data, template_name, position_name, design_name):
     #get and check template and position
     template = get_template(config_data, template_name)
-    position = get_position(config_data, template_name, position_name)
-    if not template or not position:
+    position = get_position(config_data, template, position_name)
+    design = get_design(config_data, design_name)
+    if not template or not position or not design:
         return False
-
-    #decode image to paste
-    image_to_paste = base64_to_image(image_base64)
-
     #paste
-    image = put_image_on_position(template, position, image_to_paste)
-
+    image = put_image_on_position(template, position, design)
     #return encoded
     return image_to_base64(image)
 
 def show_position_on_template(config_data, template_name, position_name):
     #get and check template and position
     template = get_template(config_data, template_name)
-    position = get_position(config_data, template_name, position_name)
+    position = get_position(config_data, template, position_name)
     if not template or not position:
         return False
-
     #show position
     image = put_position_outline(template, position)
-
     #return encoded
     return image_to_base64(image)
-
-def test_paste(config_data, template_name, position_name, image_path):
-
-    with open(image_path, "rb") as img_file:
-        image_base64 = base64.b64encode(img_file.read()).decode('utf-8')
-
-    result_base64 = paste_image_on_position(config_data, template_name, position_name, image_base64)
-    image = base64_to_image(result_base64)
-    image.show()
-
-def test_show(config_data, template_name, position_name):
-    image_base64 = show_position_on_template(config_data, template_name, position_name)
-    image = base64_to_image(image_base64)
-    image.show()
 
 

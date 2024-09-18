@@ -3,14 +3,16 @@ import json
 from flask import Flask, request, jsonify
 from google.cloud import secretmanager
 from firebase_admin import credentials, firestore, initialize_app, storage
-from dob import paste_image_on_position, show_position_on_template, get_template, get_position, test_paste, test_show
+from dob import paste_image_on_position, show_position_on_template, get_template, get_position, get_design
 
 # Global constants
-PROJECT_ID = "dobappgae"
-GOOGLE_CLOUD_PROJECT_NUMBER = 330540757080
-FIREBASE_SA_SECRET_NAME = "firebase"
+PROJECT_ID = "dob-gae-test"
+GOOGLE_CLOUD_PROJECT_NUMBER = 1088427128533
+FIREBASE_SA_SECRET_NAME = "firebase-dobconfig-test"
 FIREBASE_SA_SECRET_VERSION = "1"
 CUSTOMER_ID = "zenavico.cz"
+VERSION_STRING = "0.2"
+APPLICATION_NAME = "dob-api-test"
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -36,100 +38,82 @@ except Exception as e:
     print(f"Error connecting to Firebase: {e}")
     exit()
 
-# Placeholder for the overlay image stored in the service's configuration.
-# You can replace this with the actual path or data for the overlay image.
-# For simplicity, let's assume we have a file named 'overlay_image.png'.
-overlay_image_filename = 'overlay_image.png'
-
-
-@app.route('/ukaz_pozici', methods=['POST'])
+# /show_position
+@app.route('/show_position', methods=['POST'])
 def show_position():
     try:
         data = request.get_json()
-        template_name = data.get("vzor")
-        position_name = data.get("pozice")
-
+        template_name = data.get("template")
+        position_name = data.get("position")
         # Check if the required parameters are present in the request.
         if not template_name or not position_name:
             return jsonify({'error': 'Invalid request. Chybí parametry.'}), 400
-
         # Validate parameters
-        if not get_template(config_data, template_name):
-            return jsonify({'error': 'Neznámý vzor.'}), 404
-        if not get_position(config_data, template_name, position_name):
-            return jsonify({'error': 'Pozice ve vzoru nenalezena.'}), 404
-
+        template = get_template(config_data, template_name)
+        if not template:
+            return jsonify({'error': 'Neznámý podklad.'}), 404
+        if not get_position(config_data, template, position_name):
+            return jsonify({'error': 'Obrázek na podkladu nenalezen.'}), 404
         # Call the function to combine the images.
         combined_image = show_position_on_template(config_data, template_name, position_name)
-
         # Return the result as base64 encoded data.
-        return jsonify({'vzor_pozice': combined_image}), 200
-
+        return jsonify({'podklad_obrazek': combined_image}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
-@app.route('/nalep_obrazek', methods=['POST'])
+# /generate_mockup
+@app.route('/generate_mockup', methods=['POST'])
 def paste_image():
     try:
         data = request.get_json()
-        template_name = data.get("vzor")
-        position_name = data.get("pozice")
-        image_base64 = data.get("pozice")
-
+        template_name = data.get("template")
+        position_name = data.get("position")
+        design_name = data.get("design")
         # Check if the required parameters are present in the request.
-        if not template_name or not position_name or not image_base64:
+        if not template_name or not position_name or not design_name:
             return jsonify({'error': 'Invalid request. Missing parameters.'}), 400
-
         # Validate parameters
-        if not get_template(config_data, template_name):
+        template = get_template(config_data, template_name)
+        if not template:
+            return jsonify({'error': 'Neznámý podklad.'}), 404
+        if not get_position(config_data, template, position_name):
+            return jsonify({'error': 'Obrázek na podkladu nenalezen.'}), 404
+        if not get_design(config_data, design_name):
             return jsonify({'error': 'Neznámý vzor.'}), 404
-        if not get_position(config_data, template_name, position_name):
-            return jsonify({'error': 'Pozice ve vzoru nenalezena.'}), 404
-
         # Call the function to combine the images.
-        combined_image = paste_image_on_position(config_data, template_name, position_name, image_base64)
-
+        combined_image = paste_image_on_position(config_data, template_name, position_name, design_name)
         # Return the result as base64 encoded data.
-        return jsonify({'combined_image': combined_image}), 200
-
+        return jsonify({'mockup': combined_image}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/verze')
+# /version
+@app.route('/version')
 def show_version():
     try:
-        version = "0.0.2"
-
         # Return the result as base64 encoded data.
-        return jsonify({'verze': version}), 200
-
+        return jsonify({'version': VERSION_STRING}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/konfigurace')
+# /configuration
+@app.route('/configuration')
 def show_config(): 
     try:
-        return jsonify({'konfigurace': config_data}), 200
-
+        return jsonify({'configuration': config_data}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# /
 @app.route('/')
 def show_info():
     try:
-        app = "DOB API"
-
         # Return the result as base64 encoded data.
-        return jsonify({'aplikace': app}), 200
-
+        return jsonify({'application': APPLICATION_NAME}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
+# main
 if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
-#TEST
-# test_paste(config_data, "Dívka v černém tričku", "vepředu vlevo nahoře", "./pics/srdicko.jpg")
-# test_show(config_data, "Dívka v černém tričku", "vepředu vlevo nahoře")
