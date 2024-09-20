@@ -1,18 +1,162 @@
 import os
+import io
+import sys
+import fnmatch
 import json
+import base64
+import requests
+from PIL import Image, ImageDraw, ImageOps
+from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 from google.cloud import secretmanager
 from firebase_admin import credentials, firestore, initialize_app, storage
-from dob import paste_image_on_position, show_position_on_template, get_template, get_position, get_design
 
 # Global constants
-PROJECT_ID = "dob-gae-test"
-GOOGLE_CLOUD_PROJECT_NUMBER = 1088427128533
-FIREBASE_SA_SECRET_NAME = "firebase-dobconfig-test"
-FIREBASE_SA_SECRET_VERSION = "1"
-CUSTOMER_ID = "zenavico.cz"
-VERSION_STRING = "0.2"
-APPLICATION_NAME = "dob-api-test"
+load_dotenv()
+PROJECT_ID = os.getenv("PROJECT_ID")
+GOOGLE_CLOUD_PROJECT_NUMBER = os.getenv("GOOGLE_CLOUD_PROJECT_NUMBER")
+FIREBASE_SA_SECRET_NAME = os.getenv("FIREBASE_SA_SECRET_NAME")
+FIREBASE_SA_SECRET_VERSION = os.getenv("FIREBASE_SA_SECRET_VERSION")
+VERSION_STRING = os.getenv("PROJVERSION_STRINGECT_ID")
+APPLICATION_NAME = os.getenv("APPLICATION_NAME")
+
+def image_to_bytes(image):
+    imgByteArr = io.BytesIO()
+    image.save(imgByteArr, format=image.format)
+    return imgByteArr.getvalue()
+
+def image_to_base64(image):
+    return base64.b64encode(image_to_bytes(image)).decode('utf-8')
+
+def base64_to_image(image_base64):
+    return Image.open(io.BytesIO(base64.b64decode(image_base64.encode('utf-8'))))
+
+def get_position_size(position):
+    return (int(position["width"]), int(position["height"]))
+
+def get_position_left_top(position):
+    return (int(position["left"]), int(position["top"]))
+
+def get_position_rectangle(position):
+    top = int(position["top"])
+    left = int(position["left"])
+    bottom = top + int(position["height"])
+    right = left + int(position["width"])
+    return [(left, top), (right, bottom)]
+
+def get_template(config_data, template_name):
+    for item in config_data["templates"]:
+        if item["templateName"] == template_name:
+            return item
+    return False
+
+def get_design(config_data, design_name):
+    for item in config_data["designs"]:
+        if item["designName"] == design_name:
+            return item
+    return False
+
+def get_position_def(config_data, position_name):
+    for item in config_data["positions"]:
+        if item["positionName"] == position_name:
+            return item
+    return False
+
+def fill_in_height(config_data, position_name, position):
+    position_def = get_position_def(config_data, position_name)
+    height = 0
+    if not position_def:
+        height = position["width"]
+    elif not (position_def["arWidth"] or position_def["arWidth"]==0):
+        height = position["width"]
+    else:
+        height = position["width"] / position_def["arWidth"] * position_def["arHeight"]
+    position["height"] = height
+    return position
+
+def get_position(config_data, template, position_name):
+    if not template:
+        return False
+    for pos_item in template["positions"]:
+        if pos_item["positionName"] == position_name:
+            return fill_in_height( config_data, position_name, pos_item )
+    return False
+
+def put_image_on_position(template, position, design):
+    #open template photo
+    response = requests.get(template["imageUrl"])
+    img_template = Image.open(io.BytesIO(response.content))
+    #open design, convert to grayscale and set size for position
+    response = requests.get(design["imageUrl"])
+    img_design = Image.open(io.BytesIO(response.content)).convert("L").resize(get_position_size(position))
+    #inverted image
+    img_design_inverted = ImageOps.invert(img_design)
+    #mask with alpha
+    img_mask = img_design_inverted.copy()
+    img_mask.putalpha(img_design_inverted)
+    #paste template with design, applying mask
+    img_template.paste(img_design, get_position_left_top(position), mask=img_mask)
+    #return result
+    return img_template
+
+def put_position_outline(template, position):
+    #open template photo
+    response = requests.get(template["imageUrl"])
+    img_template = Image.open(io.BytesIO(response.content))
+    #draw position outline
+    draw = ImageDraw.Draw(img_template, "RGBA")
+    draw.rectangle(get_position_rectangle(position), fill=(255,164,0,127))
+    draw.rectangle(get_position_rectangle(position), outline=(255,164,0,255), width=3)
+    #return result
+    return img_template
+
+def paste_image_on_position(config_data, template_name, position_name, design_name):
+    #get and check template and position
+    template = get_template(config_data, template_name)
+    position = get_position(config_data, template, position_name)
+    design = get_design(config_data, design_name)
+    if not template or not position or not design:
+        return False
+    #paste
+    image = put_image_on_position(template, position, design)
+    #return encoded
+    return image_to_base64(image)
+
+def show_position_on_template(config_data, template_name, position_name):
+    #get and check template and position
+    template = get_template(config_data, template_name)
+    position = get_position(config_data, template, position_name)
+    if not template or not position:
+        return False
+    #show position
+    image = put_position_outline(template, position)
+    #return encoded
+    return image_to_base64(image)
+
+def load_collection(firestore_client, collection_name):
+    col_ref = firestore_client.collection(collection_name)
+    col_stream = col_ref.stream()
+    col_data = []
+    for doc in col_stream:
+        doc_dict = doc.to_dict()
+        doc_dict["id"] = doc.id
+        col_data.append(doc_dict)
+    return col_data
+
+def get_customer_id(users_data, api_key):
+    for item in users_data:
+        if item["apiKey"] == api_key:
+            return item["customerId"]
+    return False
+
+def get_customer_config_data(customers_data, users_data, api_key):
+    customer_id = get_customer_id(users_data, api_key)
+    if not customer_id:
+        return False
+    for item in customers_data:
+        if item["id"] == customer_id:
+            return item
+    return False
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -32,8 +176,8 @@ try:
     cred = credentials.Certificate(service_account_info)
     initialize_app(cred)
     firestore_client = firestore.client()
-    doc_ref = firestore_client.collection("customers").document("zenavico.cz")
-    config_data = doc_ref.get().to_dict()
+    customers_data = load_collection(firestore_client, "customers")
+    users_data = load_collection(firestore_client, "users")
 except Exception as e:
     print(f"Error connecting to Firebase: {e}")
     exit()
@@ -43,12 +187,16 @@ except Exception as e:
 def show_position():
     try:
         data = request.get_json()
+        api_key = data.get("api_key")
         template_name = data.get("template")
         position_name = data.get("position")
         # Check if the required parameters are present in the request.
-        if not template_name or not position_name:
+        if not api_key or not template_name or not position_name:
             return jsonify({'error': 'Invalid request. Chybí parametry.'}), 400
         # Validate parameters
+        config_data = get_customer_config_data(customers_data, users_data, api_key)
+        if not config_data:
+            return jsonify({'error': 'Nenalezena konfigurace klienta.'}), 404
         template = get_template(config_data, template_name)
         if not template:
             return jsonify({'error': 'Neznámý podklad.'}), 404
@@ -66,13 +214,17 @@ def show_position():
 def paste_image():
     try:
         data = request.get_json()
+        api_key = data.get("api_key")
         template_name = data.get("template")
         position_name = data.get("position")
         design_name = data.get("design")
         # Check if the required parameters are present in the request.
-        if not template_name or not position_name or not design_name:
+        if not api_key or not template_name or not position_name or not design_name:
             return jsonify({'error': 'Invalid request. Missing parameters.'}), 400
         # Validate parameters
+        config_data = get_customer_config_data(customers_data, users_data, api_key)
+        if not config_data:
+            return jsonify({'error': 'Nenalezena konfigurace klienta.'}), 404
         template = get_template(config_data, template_name)
         if not template:
             return jsonify({'error': 'Neznámý podklad.'}), 404
@@ -91,16 +243,44 @@ def paste_image():
 @app.route('/version')
 def show_version():
     try:
+        api_key = request.headers.get("x-api-key")
+        if not api_key:
+            return jsonify({'error': 'Invalid request. Missing parameters.'}), 400
+        # Validate parameters
+        if not get_customer_id(users_data, api_key):
+            return jsonify({'error': 'Unauthorized.'}), 401
         # Return the result as base64 encoded data.
         return jsonify({'version': VERSION_STRING}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 # /configuration
-@app.route('/configuration')
-def show_config(): 
+@app.route('/users')
+def show_users(): 
     try:
-        return jsonify({'configuration': config_data}), 200
+        api_key = request.headers.get("x-api-key")
+        if not api_key:
+            return jsonify({'error': 'Invalid request. Missing parameters.'}), 400
+        # Validate parameters
+        if not get_customer_id(users_data, api_key):
+            return jsonify({'error': 'Unauthorized.'}), 401
+        # Return the result as base64 encoded data.
+        return jsonify({'users': users_data}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# /customers
+@app.route('/customers')
+def show_customers(): 
+    try:
+        api_key = request.headers.get("x-api-key")
+        if not api_key:
+            return jsonify({'error': 'Invalid request. Missing parameters.'}), 400
+        # Validate parameters
+        if not get_customer_id(users_data, api_key):
+            return jsonify({'error': 'Unauthorized.'}), 401
+        # Return the result as base64 encoded data.
+        return jsonify({'customers': customers_data}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -108,6 +288,12 @@ def show_config():
 @app.route('/')
 def show_info():
     try:
+        api_key = request.headers.get("x-api-key")
+        if not api_key:
+            return jsonify({'error': 'Invalid request. Missing parameters.'}), 400
+        # Validate parameters
+        if not get_customer_id(users_data, api_key):
+            return jsonify({'error': 'Unauthorized.'}), 401
         # Return the result as base64 encoded data.
         return jsonify({'application': APPLICATION_NAME}), 200
     except Exception as e:
