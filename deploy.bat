@@ -1,0 +1,1 @@
+gcloud run deploy dob-api-test --service-account=dob-api-test@dob-gae-test.iam.gserviceaccount.com --region=europe-west3 --allow-unauthenticated --source . 

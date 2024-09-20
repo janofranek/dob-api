@@ -6,19 +6,17 @@ import json
 import base64
 import requests
 from PIL import Image, ImageDraw, ImageOps
-from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 from google.cloud import secretmanager
 from firebase_admin import credentials, firestore, initialize_app, storage
 
 # Global constants
-load_dotenv()
-PROJECT_ID = os.getenv("PROJECT_ID")
-GOOGLE_CLOUD_PROJECT_NUMBER = os.getenv("GOOGLE_CLOUD_PROJECT_NUMBER")
-FIREBASE_SA_SECRET_NAME = os.getenv("FIREBASE_SA_SECRET_NAME")
-FIREBASE_SA_SECRET_VERSION = os.getenv("FIREBASE_SA_SECRET_VERSION")
-VERSION_STRING = os.getenv("PROJVERSION_STRINGECT_ID")
-APPLICATION_NAME = os.getenv("APPLICATION_NAME")
+PROJECT_ID="dob-gae-test"
+GOOGLE_CLOUD_PROJECT_NUMBER=1088427128533
+FIREBASE_SA_SECRET_NAME="firebase-dobconfig-test"
+FIREBASE_SA_SECRET_VERSION="1"
+VERSION_STRING="0.3"
+APPLICATION_NAME="dob-api-test"
 
 def image_to_bytes(image):
     imgByteArr = io.BytesIO()
@@ -186,12 +184,16 @@ except Exception as e:
 @app.route('/show_position', methods=['POST'])
 def show_position():
     try:
+        # Authorization
+        api_key = request.headers.get("x-api-key")
+        if not api_key or not get_customer_id(users_data, api_key):
+            return jsonify({'error': 'Unauthorized.'}), 401
+        # Parameters
         data = request.get_json()
-        api_key = data.get("api_key")
         template_name = data.get("template")
         position_name = data.get("position")
         # Check if the required parameters are present in the request.
-        if not api_key or not template_name or not position_name:
+        if not template_name or not position_name:
             return jsonify({'error': 'Invalid request. Chybí parametry.'}), 400
         # Validate parameters
         config_data = get_customer_config_data(customers_data, users_data, api_key)
@@ -213,13 +215,17 @@ def show_position():
 @app.route('/generate_mockup', methods=['POST'])
 def paste_image():
     try:
+        # Authorization
+        api_key = request.headers.get("x-api-key")
+        if not api_key or not get_customer_id(users_data, api_key):
+            return jsonify({'error': 'Unauthorized.'}), 401
+        # Parameters
         data = request.get_json()
-        api_key = data.get("api_key")
         template_name = data.get("template")
         position_name = data.get("position")
         design_name = data.get("design")
         # Check if the required parameters are present in the request.
-        if not api_key or not template_name or not position_name or not design_name:
+        if not template_name or not position_name or not design_name:
             return jsonify({'error': 'Invalid request. Missing parameters.'}), 400
         # Validate parameters
         config_data = get_customer_config_data(customers_data, users_data, api_key)
@@ -243,11 +249,9 @@ def paste_image():
 @app.route('/version')
 def show_version():
     try:
+        # Authorization
         api_key = request.headers.get("x-api-key")
-        if not api_key:
-            return jsonify({'error': 'Invalid request. Missing parameters.'}), 400
-        # Validate parameters
-        if not get_customer_id(users_data, api_key):
+        if not api_key or not get_customer_id(users_data, api_key):
             return jsonify({'error': 'Unauthorized.'}), 401
         # Return the result as base64 encoded data.
         return jsonify({'version': VERSION_STRING}), 200
@@ -258,11 +262,9 @@ def show_version():
 @app.route('/users')
 def show_users(): 
     try:
+        # Authorization
         api_key = request.headers.get("x-api-key")
-        if not api_key:
-            return jsonify({'error': 'Invalid request. Missing parameters.'}), 400
-        # Validate parameters
-        if not get_customer_id(users_data, api_key):
+        if not api_key or not get_customer_id(users_data, api_key):
             return jsonify({'error': 'Unauthorized.'}), 401
         # Return the result as base64 encoded data.
         return jsonify({'users': users_data}), 200
@@ -273,11 +275,9 @@ def show_users():
 @app.route('/customers')
 def show_customers(): 
     try:
+        # Authorization
         api_key = request.headers.get("x-api-key")
-        if not api_key:
-            return jsonify({'error': 'Invalid request. Missing parameters.'}), 400
-        # Validate parameters
-        if not get_customer_id(users_data, api_key):
+        if not api_key or not get_customer_id(users_data, api_key):
             return jsonify({'error': 'Unauthorized.'}), 401
         # Return the result as base64 encoded data.
         return jsonify({'customers': customers_data}), 200
@@ -288,11 +288,9 @@ def show_customers():
 @app.route('/')
 def show_info():
     try:
+        # Authorization
         api_key = request.headers.get("x-api-key")
-        if not api_key:
-            return jsonify({'error': 'Invalid request. Missing parameters.'}), 400
-        # Validate parameters
-        if not get_customer_id(users_data, api_key):
+        if not api_key or not get_customer_id(users_data, api_key):
             return jsonify({'error': 'Unauthorized.'}), 401
         # Return the result as base64 encoded data.
         return jsonify({'application': APPLICATION_NAME}), 200
