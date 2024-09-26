@@ -7,6 +7,7 @@ import base64
 import requests
 from PIL import Image, ImageDraw, ImageOps
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from google.cloud import secretmanager
 from firebase_admin import credentials, firestore, initialize_app, storage
 
@@ -158,6 +159,11 @@ def get_customer_config_data(customers_data, users_data, api_key):
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# Setup CORS. Allow requests from any origin for all routes.
+CORS(app)
+# Alternatively, you can specify allowed origins:
+# CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}})
 
 # Get data from secret manager
 try:
