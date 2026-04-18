@@ -8,7 +8,7 @@ import requests
 from PIL import Image, ImageDraw, ImageOps
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from google.cloud import secretmanager
+from google.cloud import secretmanager, vision
 from firebase_admin import credentials, firestore, initialize_app, storage
 
 # Global constants
@@ -18,6 +18,7 @@ FIREBASE_SA_SECRET_NAME="firebase-dobconfig-test"
 FIREBASE_SA_SECRET_VERSION="1"
 VERSION_STRING="0.3"
 APPLICATION_NAME="dob-api-test"
+#GOOGLE_APPLICATION_CREDENTIALS="keys/dob-gae-test-3b48be2954b6.json"
 
 def image_to_bytes(image):
     imgByteArr = io.BytesIO()
@@ -185,6 +186,49 @@ try:
 except Exception as e:
     print(f"Error connecting to Firebase: {e}")
     exit()
+
+# /detect_objects
+@app.route('/api/detect-objects', methods=['POST'])
+def detect_objects():
+    try:
+        # Authorization
+        api_key = request.headers.get("x-api-key")
+        if not api_key or not get_customer_id(users_data, api_key):
+            return jsonify({'error': 'Unauthorized.'}), 401
+
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image provided'}), 400
+        
+        file = request.files['image']
+        
+        # Read the image file
+        image_content = file.read()
+        
+        # Create Vision client
+        client = vision.ImageAnnotatorClient()
+
+        # Create image object
+        image = vision.Image(content=image_content)
+
+        # Perform object detection
+        objects = client.object_localization(image=image).localized_object_annotations
+
+        # Prepare results
+        results = []
+        for object_ in objects:
+            obj = {
+                'name': object_.name,
+                'confidence': object_.score,
+                'bounding_box': [
+                    {'x': vertex.x, 'y': vertex.y}
+                    for vertex in object_.bounding_poly.normalized_vertices
+                ]
+            }
+            results.append(obj)
+
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 # /show_position
 @app.route('/show_position', methods=['POST'])
